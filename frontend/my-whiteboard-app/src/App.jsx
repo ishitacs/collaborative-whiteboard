@@ -1,164 +1,208 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
-import './App.css';
-import { useWindowSize } from './utils';
+import React, { useState, useEffect, useRef } from "react";
+import { io } from "socket.io-client";
+import "./App.css"; // Include your custom CSS if necessary
 
-const socket = io('http://localhost:5000'); // Ensure backend is running on localhost:5000
+const socket = io("http://localhost:5000");
 
 const App = () => {
   const canvasRef = useRef(null);
-  const ctxRef = useRef(null);
-  const [color, setColor] = useState('#000000');
-  const [lineWidth, setLineWidth] = useState(5);
+  const [color, setColor] = useState("#000000");
+  const [strokeWidth, setStrokeWidth] = useState(5);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [tool, setTool] = useState('pen'); // 'pen', 'eraser'
-  const [actions, setActions] = useState([]); // Store actions
-  const [redoStack, setRedoStack] = useState([]); // Store actions for redo
-  const [cursorColor, setCursorColor] = useState('red');
-  const [users, setUsers] = useState([]);
-  const { width, height } = useWindowSize();
+  const [lastPos, setLastPos] = useState({ x: 0, y: 0 });
+  const [actions, setActions] = useState([]); // Stack for undo
+  const [undoneActions, setUndoneActions] = useState([]); // Stack for redo
+  const [tool, setTool] = useState("pen"); // Active tool: 'pen' or 'eraser'
+  const [cursors, setCursors] = useState({});
 
-  // Initialize canvas context
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    ctxRef.current = ctx;
-    canvas.width = width;
-    canvas.height = height;
-
-    socket.on('draw', (data) => {
-      drawOnCanvas(data);
+    socket.on("canvas-data", (data) => {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d");
+      ctx.putImageData(data.imageData, 0, 0);
     });
 
-    socket.on('clear', () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    socket.on("user-drawing", (data) => {
+      drawLineOnCanvas(data.x, data.y, data.lastX, data.lastY, data.color, data.strokeWidth);
     });
 
-    socket.on('users', (userList) => {
-      setUsers(userList);
+    socket.on("clear-canvas", () => {
+      clearCanvas();
     });
-  }, [width, height]);
 
-  // Start drawing on canvas
+    socket.on("undo-action", (lastAction) => {
+      undoAction(lastAction);
+    });
+
+    socket.on("redo-action", (lastAction) => {
+      redoAction(lastAction);
+    });
+
+    socket.on("user-cursor", (data) => {
+      setCursors((prev) => ({
+        ...prev,
+        [data.id]: { x: data.x, y: data.y, color: data.color }
+      }));
+    });
+
+    return () => {
+      socket.off("canvas-data");
+      socket.off("user-drawing");
+      socket.off("clear-canvas");
+      socket.off("undo-action");
+      socket.off("redo-action");
+      socket.off("user-cursor");
+    };
+  }, []);
+
   const startDrawing = (e) => {
-    const { offsetX, offsetY } = e.nativeEvent;
-    ctxRef.current.beginPath();
-    ctxRef.current.moveTo(offsetX, offsetY);
     setIsDrawing(true);
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const x = e.nativeEvent.offsetX;
+    const y = e.nativeEvent.offsetY;
+    setLastPos({ x, y });
+
+    ctx.beginPath();
+    ctx.moveTo(x, y);
   };
 
-  // Draw on canvas based on current tool
   const draw = (e) => {
     if (!isDrawing) return;
 
-    const { offsetX, offsetY } = e.nativeEvent;
-    if (tool === 'pen') {
-      ctxRef.current.lineTo(offsetX, offsetY);
-      ctxRef.current.strokeStyle = color;
-      ctxRef.current.lineWidth = lineWidth;
-      ctxRef.current.stroke();
-    } else if (tool === 'eraser') {
-      ctxRef.current.clearRect(offsetX - lineWidth / 2, offsetY - lineWidth / 2, lineWidth, lineWidth);
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const x = e.nativeEvent.offsetX;
+    const y = e.nativeEvent.offsetY;
+
+    // Check for eraser tool
+    if (tool === "eraser") {
+      ctx.globalCompositeOperation = "destination-out"; // Erase mode
+      ctx.lineWidth = strokeWidth * 2; // Make eraser a bit larger
+    } else {
+      ctx.globalCompositeOperation = "source-over"; // Normal drawing mode
+      ctx.strokeStyle = color;
+      ctx.lineWidth = strokeWidth;
     }
 
-    const drawingData = {
-      x: offsetX,
-      y: offsetY,
-      tool,
-      color,
-      lineWidth,
-    };
+    ctx.lineTo(x, y);
+    ctx.stroke();
 
-    // Add the action to history for undo/redo
-    setActions((prevActions) => [...prevActions, drawingData]);
-    socket.emit('draw', drawingData);
+    socket.emit("draw", {
+      x,
+      y,
+      lastX: lastPos.x,
+      lastY: lastPos.y,
+      color,
+      strokeWidth,
+      tool
+    });
+
+    setLastPos({ x, y });
+
+    setActions((prevActions) => [
+      ...prevActions,
+      { type: "draw", x, y, lastPos, color, strokeWidth, tool }
+    ]);
   };
 
   const stopDrawing = () => {
-    if (isDrawing) {
-      setIsDrawing(false);
-    }
+    setIsDrawing(false);
   };
 
-  // Clear canvas
   const clearCanvas = () => {
-    ctxRef.current.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    setActions([]); // Clear actions
-    setRedoStack([]); // Clear redo stack
-    socket.emit('clear');
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    socket.emit("clear");
   };
 
-  // Undo functionality
-  const undo = () => {
+  const undoAction = (lastAction) => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+
+    ctx.putImageData(lastAction.imageData, 0, 0);
+    setUndoneActions((prev) => [...prev, lastAction]);
+  };
+
+  const redoAction = (lastAction) => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+
+    ctx.putImageData(lastAction.imageData, 0, 0);
+  };
+
+  const onUndo = () => {
     if (actions.length === 0) return;
-
-    const lastAction = actions.pop(); // Pop the last action
-    setRedoStack([lastAction, ...redoStack]); // Push it to redo stack
-    redrawCanvas(actions); // Redraw the canvas with the updated actions
+    const lastAction = actions.pop();
+    setActions(actions);
+    setUndoneActions([...undoneActions, lastAction]);
+    socket.emit("undo", lastAction);
   };
 
-  // Redo functionality
-  const redo = () => {
-    if (redoStack.length === 0) return;
-
-    const redoAction = redoStack.shift(); // Pop the first action from redo stack
-    setActions([...actions, redoAction]); // Add it back to actions array
-    redrawCanvas([...actions, redoAction]); // Redraw the canvas with the updated actions
+  const onRedo = () => {
+    if (undoneActions.length === 0) return;
+    const lastAction = undoneActions.pop();
+    setUndoneActions(undoneActions);
+    socket.emit("redo", lastAction);
   };
 
-  // Redraw canvas based on actions
-  const redrawCanvas = (actionHistory) => {
-    ctxRef.current.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    actionHistory.forEach((action) => {
-      drawOnCanvas(action);
-    });
-  };
+  const handleColorChange = (e) => setColor(e.target.value);
 
-  // Draw on the canvas (used for both user and broadcasted drawing)
-  const drawOnCanvas = (data) => {
-    const { x, y, tool, color, lineWidth } = data;
+  const handleStrokeWidthChange = (e) => setStrokeWidth(Number(e.target.value));
 
-    if (tool === 'pen') {
-      ctxRef.current.beginPath();
-      ctxRef.current.moveTo(x, y);
-      ctxRef.current.lineTo(x, y);
-      ctxRef.current.strokeStyle = color;
-      ctxRef.current.lineWidth = lineWidth;
-      ctxRef.current.stroke();
-    } else if (tool === 'eraser') {
-      ctxRef.current.clearRect(x - lineWidth / 2, y - lineWidth / 2, lineWidth, lineWidth);
-    }
+  const toggleTool = () => {
+    setTool(tool === "pen" ? "eraser" : "pen");
   };
 
   return (
-    <div className="app">
+    <div className="App">
       <div className="toolbar">
-        <button onClick={() => setTool('pen')}>Pen</button>
-        <button onClick={() => setTool('eraser')}>Eraser</button>
-        <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
-        <input
-          type="range"
-          min="1"
-          max="10"
-          value={lineWidth}
-          onChange={(e) => setLineWidth(e.target.value)}
-        />
+        <input type="color" value={color} onChange={handleColorChange} />
+        {/* Seekbar for stroke width */}
+        <div>
+          <label htmlFor="strokeWidth" className="block mb-2 text-sm">Stroke Width: {strokeWidth}</label>
+          <input
+            id="strokeWidth"
+            type="range"
+            min="1"
+            max="20"
+            value={strokeWidth}
+            onChange={handleStrokeWidthChange}
+            className="w-48"
+          />
+        </div>
         <button onClick={clearCanvas}>Clear</button>
-        <button onClick={undo}>Undo</button>
-        <button onClick={redo}>Redo</button>
+        <button onClick={onUndo}>Undo</button>
+        <button onClick={onRedo}>Redo</button>
+        <button onClick={toggleTool}>
+          {tool === "pen" ? "Switch to Eraser" : "Switch to Pen"}
+        </button>
       </div>
-
       <canvas
         ref={canvasRef}
+        width={800}
+        height={600}
         onMouseDown={startDrawing}
         onMouseMove={draw}
         onMouseUp={stopDrawing}
         onMouseLeave={stopDrawing}
       />
-      
-      <div className="users">
-        {users.map((user) => (
-          <div key={user.id} style={{ color: user.cursorColor }}>{user.name}</div>
+      <div className="cursors">
+        {Object.keys(cursors).map((key) => (
+          <div
+            key={key}
+            className="cursor"
+            style={{
+              position: "absolute",
+              top: cursors[key].y + "px",
+              left: cursors[key].x + "px",
+              backgroundColor: cursors[key].color,
+              width: 10,
+              height: 10,
+              borderRadius: "50%",
+            }}
+          />
         ))}
       </div>
     </div>
