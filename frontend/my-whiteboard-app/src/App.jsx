@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import './App.css';
 
-const socket = io('http://localhost:4000'); // Point to backend
+const socket = io("https://your-backend-url.vercel.app");
 
 function App() {
   const canvasRef = useRef(null);

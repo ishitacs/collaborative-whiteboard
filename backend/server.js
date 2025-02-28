@@ -1,28 +1,19 @@
-// backend/server.js
-const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-
+const express = require("express");
 const app = express();
-const server = http.createServer(app);
-const io = socketIo(server);
+const http = require("http").Server(app);
+const io = require("socket.io")(http);
 
-app.use(express.static('public')); // Serve frontend
-
-io.on('connection', (socket) => {
-    console.log('A user connected');
-
-    socket.on('draw', (data) => {
-        // Broadcast drawing data to all other users
-        socket.broadcast.emit('draw', data);
-    });
-
-    socket.on('disconnect', () => {
-        console.log('A user disconnected');
-    });
+app.get("/", (req, res) => {
+  res.send("Backend is running");
 });
 
-const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+io.on("connection", (socket) => {
+  console.log("a user connected");
+  socket.on("disconnect", () => {
+    console.log("user disconnected");
+  });
+});
+
+http.listen(4000, () => {
+  console.log("Server running on http://localhost:4000");
 });
