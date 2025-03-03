@@ -15,10 +15,11 @@ app.use(express.static("public"));
 
 let users = [];
 let canvasState = null;
+// Track active drawing sessions
+let drawingSessions = {};
 
 io.on("connection", (socket) => {
   console.log("New client connected: " + socket.id);
-
   const userColor = `hsl(${Math.floor(Math.random() * 360)}, 100%, 50%)`;
   users.push({ id: socket.id, color: userColor });
 
@@ -31,7 +32,32 @@ io.on("connection", (socket) => {
   }
 
   socket.on("drawing", (data) => {
+    // Add the user ID to the data if it's not already there
+    if (!data.userId) {
+      data.userId = socket.id;
+    }
+
+    // Update drawing session tracking
+    if (data.isNewPath) {
+      drawingSessions[socket.id] = {
+        lastX: data.x,
+        lastY: data.y,
+        isActive: true
+      };
+    } else if (drawingSessions[socket.id]) {
+      drawingSessions[socket.id].lastX = data.x;
+      drawingSessions[socket.id].lastY = data.y;
+    }
+
+    // Broadcast to all other clients
     socket.broadcast.emit("drawing", data);
+  });
+
+  socket.on("endPath", (userId) => {
+    if (drawingSessions[userId]) {
+      drawingSessions[userId].isActive = false;
+    }
+    socket.broadcast.emit("endPath", userId);
   });
 
   socket.on("cursorMove", (data) => {
@@ -44,10 +70,11 @@ io.on("connection", (socket) => {
 
   socket.on("clear", () => {
     canvasState = null;
+    drawingSessions = {}; // Clear all drawing sessions
     io.emit("clear");
   });
 
-  // New handlers for undo and redo
+  // Handlers for undo and redo
   socket.on("undo", (imageData) => {
     canvasState = imageData;
     socket.broadcast.emit("undo", imageData);
@@ -61,6 +88,12 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("Client disconnected: " + socket.id);
     users = users.filter((user) => user.id !== socket.id);
+
+    // Clean up drawing sessions
+    if (drawingSessions[socket.id]) {
+      delete drawingSessions[socket.id];
+    }
+
     io.emit("userDisconnected", socket.id);
   });
 });

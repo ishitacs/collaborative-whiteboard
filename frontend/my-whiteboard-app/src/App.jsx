@@ -17,9 +17,10 @@ function App() {
     const [cursors, setCursors] = useState({});
     const canvasRef = useRef(null);
     const ctxRef = useRef(null);
-    const lastPoint = useRef({ x: 0, y: 0 }); // Track the last point
+    const lastPoint = useRef({ x: 0, y: 0 });
     const userColor = useRef(null);
     const isTouchDevice = useRef(false);
+    const drawingSessions = useRef({}); // Track separate drawing sessions
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -67,6 +68,10 @@ function App() {
                 delete newCursors[userId];
                 return newCursors;
             });
+            // Also clean up drawing session data
+            const newDrawingSessions = { ...drawingSessions.current };
+            delete newDrawingSessions[userId];
+            drawingSessions.current = newDrawingSessions;
         });
 
         // Listen for cursor movements from other users
@@ -78,28 +83,45 @@ function App() {
         });
 
         socket.on("drawing", (data) => {
-            const { x, y, color, strokeWidth, isEraser, prevX, prevY } = data;
-            ctxRef.current.beginPath();
-            ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
-            ctxRef.current.lineWidth = strokeWidth;
+            const { userId, x, y, color, strokeWidth, isEraser, isNewPath } = data;
 
-            if (prevX !== null && prevY !== null) {
-                ctxRef.current.moveTo(prevX, prevY);
-                ctxRef.current.lineTo(x, y);
-            } else {
+            // Handle drawing session tracking for each user
+            if (isNewPath || !drawingSessions.current[userId]) {
+                // Starting a new path
+                drawingSessions.current[userId] = { x, y };
+                ctxRef.current.beginPath();
                 ctxRef.current.moveTo(x, y);
+            } else {
+                // Continue existing path
+                const prevPoint = drawingSessions.current[userId];
+                ctxRef.current.beginPath();
+                ctxRef.current.moveTo(prevPoint.x, prevPoint.y);
+                ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
+                ctxRef.current.lineWidth = strokeWidth;
                 ctxRef.current.lineTo(x, y);
+                ctxRef.current.stroke();
+
+                // Update last point for this user
+                drawingSessions.current[userId] = { x, y };
             }
-            ctxRef.current.stroke();
+        });
+
+        socket.on("endPath", (userId) => {
+            // Clean up the session when a user stops drawing
+            if (drawingSessions.current[userId]) {
+                ctxRef.current.closePath();
+                drawingSessions.current[userId] = null;
+            }
         });
 
         socket.on("clear", () => {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             setHistory([]);
             setRedoStack([]);
+            drawingSessions.current = {}; // Reset all drawing sessions
         });
 
-        // NEW: Listen for undo and redo events
+        // Listen for undo and redo events
         socket.on("undo", (lastImageData) => {
             setHistory(prev => prev.slice(0, -1));
             setRedoStack(prev => [lastImageData, ...prev]);
@@ -118,6 +140,7 @@ function App() {
             socket.off("userDisconnected");
             socket.off("cursorMove");
             socket.off("drawing");
+            socket.off("endPath");
             socket.off("clear");
             socket.off("undo");
             socket.off("redo");
@@ -152,10 +175,21 @@ function App() {
         ctxRef.current.beginPath();
         ctxRef.current.moveTo(offsetX, offsetY);
         setIsDrawing(true);
-        lastPoint.current = { x: offsetX, y: offsetY }; // Store the starting point
+        lastPoint.current = { x: offsetX, y: offsetY };
+
+        // Start a new drawing path
+        socket.emit("drawing", {
+            userId: socket.id,
+            x: offsetX,
+            y: offsetY,
+            color,
+            strokeWidth,
+            isEraser,
+            isNewPath: true
+        });
     };
 
-    // NEW: Touch event handlers
+    // Touch event handlers
     const handleTouchStart = (e) => {
         e.preventDefault();
         const touch = e.touches[0];
@@ -167,6 +201,17 @@ function App() {
         ctxRef.current.moveTo(offsetX, offsetY);
         setIsDrawing(true);
         lastPoint.current = { x: offsetX, y: offsetY };
+
+        // Start a new drawing path
+        socket.emit("drawing", {
+            userId: socket.id,
+            x: offsetX,
+            y: offsetY,
+            color,
+            strokeWidth,
+            isEraser,
+            isNewPath: true
+        });
     };
 
     const handleTouchMove = (e) => {
@@ -195,16 +240,16 @@ function App() {
         ctxRef.current.stroke();
 
         socket.emit("drawing", {
+            userId: socket.id,
             x: offsetX,
             y: offsetY,
             color,
             strokeWidth,
             isEraser,
-            prevX: lastPoint.current.x, // Include the last point
-            prevY: lastPoint.current.y,
+            isNewPath: false
         });
 
-        lastPoint.current = { x: offsetX, y: offsetY }; // Update the last point
+        lastPoint.current = { x: offsetX, y: offsetY };
     };
 
     const stopDrawing = () => {
@@ -212,11 +257,14 @@ function App() {
         ctxRef.current.closePath();
         setIsDrawing(false);
 
+        // Signal that this drawing path is complete
+        socket.emit("endPath", socket.id);
+
         // Save the canvas state after drawing
         const newState = canvasRef.current.toDataURL();
         setHistory((prev) => [...prev, newState]);
         setRedoStack([]);
-        lastPoint.current = { x: 0, y: 0 }; // Reset the last point
+        lastPoint.current = { x: 0, y: 0 };
     };
 
     const handleUndo = () => {
