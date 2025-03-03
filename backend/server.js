@@ -2,7 +2,6 @@
 const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
-
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -15,6 +14,7 @@ const io = socketIo(server, {
 app.use(express.static("public"));
 
 let users = [];
+let canvasState = null;
 
 io.on("connection", (socket) => {
   console.log("New client connected: " + socket.id);
@@ -22,10 +22,21 @@ io.on("connection", (socket) => {
   const userColor = `hsl(${Math.floor(Math.random() * 360)}, 100%, 50%)`;
   users.push({ id: socket.id, color: userColor });
 
+  // Send the new user to all clients
   io.emit("newUser", { id: socket.id, color: userColor });
+
+  // Send current canvas state to the new user
+  if (canvasState) {
+    socket.emit("initialCanvas", canvasState);
+  }
 
   socket.on("drawing", (data) => {
     socket.broadcast.emit("drawing", data);
+  });
+
+  socket.on("drawingComplete", () => {
+    // Share drawing completion event with other users
+    socket.broadcast.emit("drawingComplete");
   });
 
   socket.on("cursorMove", (data) => {
@@ -37,6 +48,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("clear", () => {
+    canvasState = null;
     io.emit("clear");
   });
 
