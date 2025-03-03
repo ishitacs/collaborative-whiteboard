@@ -11,22 +11,15 @@ function App() {
     const [color, setColor] = useState("#000000");
     const [strokeWidth, setStrokeWidth] = useState(5);
     const [isEraser, setIsEraser] = useState(false);
+    const [history, setHistory] = useState([]);
+    const [redoStack, setRedoStack] = useState([]);
     const [connectedUsers, setConnectedUsers] = useState([]);
     const [cursors, setCursors] = useState({});
-
-    // Refs
     const canvasRef = useRef(null);
     const ctxRef = useRef(null);
-    const lastPoint = useRef({ x: 0, y: 0 });
+    const lastPoint = useRef({ x: 0, y: 0 }); // Track the last point
     const userColor = useRef(null);
-    const userId = useRef(null);
     const isTouchDevice = useRef(false);
-
-    // Drawing history tracking
-    const drawCommandsRef = useRef([]); // All drawing commands from all users
-    const myDrawCommandsRef = useRef([]); // Only current user's commands
-    const redoStackRef = useRef([]); // Redo stack for current user
-    const lastCommandIdRef = useRef(0); // Used to generate unique command IDs
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -34,7 +27,7 @@ function App() {
         canvas.height = window.innerHeight * 0.7;
         const ctx = canvas.getContext("2d");
         ctx.lineCap = "round";
-        ctx.lineJoin = "round";
+        ctx.lineJoin = "round"; // Ensures smooth lines
         ctxRef.current = ctx;
 
         // Check if device supports touch
@@ -42,11 +35,7 @@ function App() {
 
         // Handle window resize
         const handleResize = () => {
-            // Save current dimensions
-            const prevWidth = canvas.width;
-            const prevHeight = canvas.height;
-
-            // Update dimensions
+            const imageData = canvas.toDataURL();
             canvas.width = window.innerWidth * 0.9;
             canvas.height = window.innerHeight * 0.7;
 
@@ -54,10 +43,10 @@ function App() {
             ctx.lineCap = "round";
             ctx.lineJoin = "round";
 
-            // Re-render all commands with adjusted scale
-            const scaleX = canvas.width / prevWidth;
-            const scaleY = canvas.height / prevHeight;
-            redrawCanvas(drawCommandsRef.current, scaleX, scaleY);
+            // Restore drawing
+            const img = new Image();
+            img.onload = () => ctx.drawImage(img, 0, 0);
+            img.src = imageData;
         };
 
         window.addEventListener('resize', handleResize);
@@ -67,15 +56,6 @@ function App() {
             setConnectedUsers(prev => [...prev, user]);
             if (user.id === socket.id) {
                 userColor.current = user.color;
-                userId.current = user.id;
-            }
-        });
-
-        // Listen for drawing history
-        socket.on("drawingHistory", (commands) => {
-            if (commands && commands.length) {
-                drawCommandsRef.current = commands;
-                redrawCanvas(commands);
             }
         });
 
@@ -97,109 +77,53 @@ function App() {
             }));
         });
 
-        // Listen for new drawing commands
-        socket.on("drawCommand", (command) => {
-            const updatedCommands = [...drawCommandsRef.current, command];
-            drawCommandsRef.current = updatedCommands;
-            executeDrawCommand(command);
-        });
+        socket.on("drawing", (data) => {
+            const { x, y, color, strokeWidth, isEraser, prevX, prevY } = data;
+            ctxRef.current.beginPath();
+            ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
+            ctxRef.current.lineWidth = strokeWidth;
 
-        // Listen for undo commands from other users
-        socket.on("undoCommand", (data) => {
-            const { userId, commandId } = data;
-
-            // Find and remove the command
-            const updatedCommands = drawCommandsRef.current.filter(cmd =>
-                !(cmd.userId === userId && cmd.id === commandId)
-            );
-
-            // Update our command history
-            drawCommandsRef.current = updatedCommands;
-
-            // Redraw the canvas completely
-            redrawCanvas(updatedCommands);
-        });
-
-        // Listen for redo commands from other users
-        socket.on("redoCommand", (command) => {
-            const updatedCommands = [...drawCommandsRef.current, command];
-            drawCommandsRef.current = updatedCommands;
-            executeDrawCommand(command);
+            if (prevX !== null && prevY !== null) {
+                ctxRef.current.moveTo(prevX, prevY);
+                ctxRef.current.lineTo(x, y);
+            } else {
+                ctxRef.current.moveTo(x, y);
+                ctxRef.current.lineTo(x, y);
+            }
+            ctxRef.current.stroke();
         });
 
         socket.on("clear", () => {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            drawCommandsRef.current = [];
-            myDrawCommandsRef.current = [];
-            redoStackRef.current = [];
+            setHistory([]);
+            setRedoStack([]);
         });
 
-        // Request drawing history when connecting
-        socket.emit("requestDrawingHistory");
+        // NEW: Listen for undo and redo events
+        socket.on("undo", (lastImageData) => {
+            setHistory(prev => prev.slice(0, -1));
+            setRedoStack(prev => [lastImageData, ...prev]);
+            redrawCanvas(lastImageData);
+        });
+
+        socket.on("redo", (imageData) => {
+            setHistory(prev => [...prev, imageData]);
+            setRedoStack(prev => prev.slice(1));
+            redrawCanvas(imageData);
+        });
 
         // Cleanup
         return () => {
             socket.off("newUser");
-            socket.off("drawingHistory");
             socket.off("userDisconnected");
             socket.off("cursorMove");
-            socket.off("drawCommand");
-            socket.off("undoCommand");
-            socket.off("redoCommand");
+            socket.off("drawing");
             socket.off("clear");
+            socket.off("undo");
+            socket.off("redo");
             window.removeEventListener('resize', handleResize);
         };
     }, []);
-
-    // Execute a single draw command
-    const executeDrawCommand = (command) => {
-        const ctx = ctxRef.current;
-
-        if (command.type === 'draw') {
-            const { x, y, prevX, prevY, color, strokeWidth, isEraser } = command;
-
-            ctx.beginPath();
-            ctx.strokeStyle = isEraser ? "#FFFFFF" : color;
-            ctx.lineWidth = strokeWidth;
-
-            if (prevX !== null && prevY !== null) {
-                ctx.moveTo(prevX, prevY);
-                ctx.lineTo(x, y);
-            } else {
-                ctx.moveTo(x, y);
-                ctx.lineTo(x, y);
-            }
-
-            ctx.stroke();
-        }
-    };
-
-    // Redraw the entire canvas using all commands
-    const redrawCanvas = (commands, scaleX = 1, scaleY = 1) => {
-        const ctx = ctxRef.current;
-        const canvas = canvasRef.current;
-
-        // Clear the canvas
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Redraw all commands
-        if (commands && commands.length) {
-            // Apply scale transform if needed
-            if (scaleX !== 1 || scaleY !== 1) {
-                ctx.save();
-                ctx.scale(scaleX, scaleY);
-            }
-
-            commands.forEach(command => {
-                executeDrawCommand(command);
-            });
-
-            // Restore transform if scaling was applied
-            if (scaleX !== 1 || scaleY !== 1) {
-                ctx.restore();
-            }
-        }
-    };
 
     // Mouse movement tracking for cursor position
     const handleMouseMove = (e) => {
@@ -225,11 +149,13 @@ function App() {
         if (isTouchDevice.current) return;
 
         const { offsetX, offsetY } = nativeEvent;
+        ctxRef.current.beginPath();
+        ctxRef.current.moveTo(offsetX, offsetY);
         setIsDrawing(true);
-        lastPoint.current = { x: offsetX, y: offsetY };
+        lastPoint.current = { x: offsetX, y: offsetY }; // Store the starting point
     };
 
-    // Touch event handlers
+    // NEW: Touch event handlers
     const handleTouchStart = (e) => {
         e.preventDefault();
         const touch = e.touches[0];
@@ -237,6 +163,8 @@ function App() {
         const offsetX = touch.clientX - rect.left;
         const offsetY = touch.clientY - rect.top;
 
+        ctxRef.current.beginPath();
+        ctxRef.current.moveTo(offsetX, offsetY);
         setIsDrawing(true);
         lastPoint.current = { x: offsetX, y: offsetY };
     };
@@ -261,100 +189,87 @@ function App() {
     const draw = (offsetX, offsetY) => {
         if (!isDrawing) return;
 
-        // Create a draw command
-        const commandId = ++lastCommandIdRef.current;
-        const drawCommand = {
-            id: commandId,
-            type: 'draw',
-            userId: socket.id,
+        ctxRef.current.lineTo(offsetX, offsetY);
+        ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
+        ctxRef.current.lineWidth = strokeWidth;
+        ctxRef.current.stroke();
+
+        socket.emit("drawing", {
             x: offsetX,
             y: offsetY,
-            prevX: lastPoint.current.x,
-            prevY: lastPoint.current.y,
-            color: isEraser ? "#FFFFFF" : color,
+            color,
             strokeWidth,
-            isEraser
-        };
+            isEraser,
+            prevX: lastPoint.current.x, // Include the last point
+            prevY: lastPoint.current.y,
+        });
 
-        // Add to local command history
-        drawCommandsRef.current.push(drawCommand);
-        myDrawCommandsRef.current.push(drawCommand);
-
-        // Execute the command locally
-        executeDrawCommand(drawCommand);
-
-        // Send to server
-        socket.emit("drawCommand", drawCommand);
-
-        // Update last point
-        lastPoint.current = { x: offsetX, y: offsetY };
+        lastPoint.current = { x: offsetX, y: offsetY }; // Update the last point
     };
 
     const stopDrawing = () => {
+        if (!isDrawing) return;
+        ctxRef.current.closePath();
         setIsDrawing(false);
-        lastPoint.current = { x: 0, y: 0 };
 
-        // Clear redo stack when a new drawing is made
-        if (myDrawCommandsRef.current.length > 0) {
-            redoStackRef.current = [];
-        }
+        // Save the canvas state after drawing
+        const newState = canvasRef.current.toDataURL();
+        setHistory((prev) => [...prev, newState]);
+        setRedoStack([]);
+        lastPoint.current = { x: 0, y: 0 }; // Reset the last point
     };
 
     const handleUndo = () => {
-        // Get the most recent command from this user
-        const userCommands = myDrawCommandsRef.current;
+        if (history.length === 0) return;
 
-        if (userCommands.length === 0) return;
+        const lastState = history[history.length - 1];
+        const newHistory = history.slice(0, -1);
 
-        // Get the last command
-        const lastCommand = userCommands[userCommands.length - 1];
+        // Get the previous state or create blank if none exists
+        const previousState = newHistory.length > 0
+            ? newHistory[newHistory.length - 1]
+            : null;
 
-        // Remove it from my commands
-        myDrawCommandsRef.current = userCommands.slice(0, -1);
+        // Emit undo event with the previous state
+        socket.emit("undo", previousState);
 
-        // Add to redo stack
-        redoStackRef.current.push(lastCommand);
-
-        // Tell server to undo this command
-        socket.emit("undoCommand", {
-            userId: lastCommand.userId,
-            commandId: lastCommand.id
-        });
-
-        // Remove from all commands
-        drawCommandsRef.current = drawCommandsRef.current.filter(cmd =>
-            !(cmd.userId === lastCommand.userId && cmd.id === lastCommand.id)
-        );
-
-        // Redraw canvas
-        redrawCanvas(drawCommandsRef.current);
+        // Update local state
+        setRedoStack((prev) => [lastState, ...prev]);
+        setHistory(newHistory);
+        redrawCanvas(previousState);
     };
 
     const handleRedo = () => {
-        // Get the most recent undone command
-        if (redoStackRef.current.length === 0) return;
+        if (redoStack.length === 0) return;
 
-        const commandToRedo = redoStackRef.current.pop();
+        const stateToRestore = redoStack[0];
 
-        // Add back to my commands
-        myDrawCommandsRef.current.push(commandToRedo);
+        // Emit redo event
+        socket.emit("redo", stateToRestore);
 
-        // Add to all commands
-        drawCommandsRef.current.push(commandToRedo);
+        // Update local state
+        setHistory((prev) => [...prev, stateToRestore]);
+        setRedoStack((prev) => prev.slice(1));
+        redrawCanvas(stateToRestore);
+    };
 
-        // Send to server
-        socket.emit("redoCommand", commandToRedo);
+    const redrawCanvas = (imageData) => {
+        const canvas = canvasRef.current;
+        const ctx = ctxRef.current;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Execute command locally
-        executeDrawCommand(commandToRedo);
+        if (imageData) {
+            const img = new Image();
+            img.src = imageData;
+            img.onload = () => ctx.drawImage(img, 0, 0);
+        }
     };
 
     const handleClear = () => {
         socket.emit("clear");
         ctxRef.current.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-        drawCommandsRef.current = [];
-        myDrawCommandsRef.current = [];
-        redoStackRef.current = [];
+        setHistory([]);
+        setRedoStack([]);
     };
 
     // Render other users' cursors

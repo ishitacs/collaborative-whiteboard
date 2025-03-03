@@ -25,18 +25,13 @@ io.on("connection", (socket) => {
   // Send the new user to all clients
   io.emit("newUser", { id: socket.id, color: userColor });
 
-  // Send current canvas state to the new user
+  // If we have a saved canvas state, send it to the new user
   if (canvasState) {
-    socket.emit("initialCanvas", canvasState);
+    socket.emit("canvasState", canvasState);
   }
 
   socket.on("drawing", (data) => {
     socket.broadcast.emit("drawing", data);
-  });
-
-  socket.on("drawingComplete", () => {
-    // Share drawing completion event with other users
-    socket.broadcast.emit("drawingComplete");
   });
 
   socket.on("cursorMove", (data) => {
@@ -50,6 +45,17 @@ io.on("connection", (socket) => {
   socket.on("clear", () => {
     canvasState = null;
     io.emit("clear");
+  });
+
+  // New handlers for undo and redo
+  socket.on("undo", (imageData) => {
+    canvasState = imageData;
+    socket.broadcast.emit("undo", imageData);
+  });
+
+  socket.on("redo", (imageData) => {
+    canvasState = imageData;
+    socket.broadcast.emit("redo", imageData);
   });
 
   socket.on("disconnect", () => {
