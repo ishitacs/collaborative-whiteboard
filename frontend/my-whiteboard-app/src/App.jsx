@@ -13,9 +13,12 @@ function App() {
     const [isEraser, setIsEraser] = useState(false);
     const [history, setHistory] = useState([]);
     const [redoStack, setRedoStack] = useState([]);
+    const [connectedUsers, setConnectedUsers] = useState([]);
+    const [cursors, setCursors] = useState({});
     const canvasRef = useRef(null);
     const ctxRef = useRef(null);
     const lastPoint = useRef({ x: 0, y: 0 }); // Track the last point
+    const userColor = useRef(null);
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -25,6 +28,32 @@ function App() {
         ctx.lineCap = "round";
         ctx.lineJoin = "round"; // Ensures smooth lines
         ctxRef.current = ctx;
+
+        // Listen for new user connections
+        socket.on("newUser", (user) => {
+            setConnectedUsers(prev => [...prev, user]);
+            if (user.id === socket.id) {
+                userColor.current = user.color;
+            }
+        });
+
+        // Listen for user disconnections
+        socket.on("userDisconnected", (userId) => {
+            setConnectedUsers(prev => prev.filter(user => user.id !== userId));
+            setCursors(prev => {
+                const newCursors = { ...prev };
+                delete newCursors[userId];
+                return newCursors;
+            });
+        });
+
+        // Listen for cursor movements from other users
+        socket.on("cursorMove", (data) => {
+            setCursors(prev => ({
+                ...prev,
+                [data.userId]: { x: data.x, y: data.y, color: data.color }
+            }));
+        });
 
         socket.on("drawing", (data) => {
             const { x, y, color, strokeWidth, isEraser, prevX, prevY } = data;
@@ -47,7 +76,34 @@ function App() {
             setHistory([]);
             setRedoStack([]);
         });
+
+        // Cleanup
+        return () => {
+            socket.off("newUser");
+            socket.off("userDisconnected");
+            socket.off("cursorMove");
+            socket.off("drawing");
+            socket.off("clear");
+        };
     }, []);
+
+    // Mouse movement tracking for cursor position
+    const handleMouseMove = (e) => {
+        const { offsetX, offsetY } = e.nativeEvent;
+
+        // Emit cursor position to others
+        socket.emit("cursorMove", {
+            userId: socket.id,
+            x: offsetX,
+            y: offsetY,
+            color: userColor.current || color
+        });
+
+        // Update for drawing if needed
+        if (isDrawing) {
+            draw(e);
+        }
+    };
 
     const startDrawing = ({ nativeEvent }) => {
         const { offsetX, offsetY } = nativeEvent;
@@ -119,6 +175,26 @@ function App() {
         setRedoStack([]);
     };
 
+    // Render other users' cursors
+    const renderCursors = () => {
+        return Object.entries(cursors).map(([userId, cursor]) => (
+            <div
+                key={userId}
+                className="cursor"
+                style={{
+                    left: `${cursor.x}px`,
+                    top: `${cursor.y}px`,
+                    backgroundColor: cursor.color
+                }}
+            >
+                <div className="cursor-point"></div>
+                <div className="cursor-label" style={{ backgroundColor: cursor.color }}>
+                    User {userId.slice(0, 4)}
+                </div>
+            </div>
+        ));
+    };
+
     return (
         <div className="App">
             <h1 className="text-3xl text-center my-4">Collaborative Whiteboard</h1>
@@ -130,8 +206,20 @@ function App() {
                 <button onClick={handleRedo}><FaRedo /> Redo</button>
                 <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
                 <input type="range" min="1" max="20" value={strokeWidth} onChange={(e) => setStrokeWidth(e.target.value)} />
+                <div className="user-count">
+                    <span>{connectedUsers.length} users connected</span>
+                </div>
             </div>
-            <canvas ref={canvasRef} onMouseDown={startDrawing} onMouseUp={stopDrawing} onMouseLeave={stopDrawing} onMouseMove={draw} />
+            <div className="canvas-container" style={{ position: 'relative' }}>
+                <canvas
+                    ref={canvasRef}
+                    onMouseDown={startDrawing}
+                    onMouseUp={stopDrawing}
+                    onMouseLeave={stopDrawing}
+                    onMouseMove={handleMouseMove}
+                />
+                {renderCursors()}
+            </div>
         </div>
     );
 }
