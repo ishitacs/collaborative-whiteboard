@@ -1,81 +1,64 @@
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
-const cors = require("cors");
+const socketIo = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
+const io = socketIo(server, {
   cors: {
     origin: "*",
-  },
-});
-
-let canvasState = null;
-let users = {};
-
-io.on("connection", (socket) => {
-  console.log("A user connected:", socket.id);
-
-  // Send the current canvas state to the newly connected user
-  if (canvasState) {
-    socket.emit("load-canvas", canvasState);
+    methods: ["GET", "POST"]
   }
+});
 
-  // Assign a random color to the new user
-  users[socket.id] = { color: getRandomColor() };
+// Serving the frontend (optional)
+app.use(express.static('public'));
 
-  // Notify others of the new user
-  io.emit("user-list", users);
+let users = [];  // To store the users and their colors
 
-  // Handle drawing event
-  socket.on("draw", (data) => {
-    socket.broadcast.emit("draw", data);
+// Handle new client connections
+io.on("connection", (socket) => {
+  console.log("New client connected: " + socket.id);
+
+  // Assign random color to the user (can be improved later to manage colors more effectively)
+  const userColor = `hsl(${Math.floor(Math.random() * 360)}, 100%, 50%)`;
+  users.push({ id: socket.id, color: userColor });
+
+  // Broadcast to all users when a new user joins
+  io.emit("newUser", { id: socket.id, color: userColor });
+
+  // Listen to drawing events from users
+  socket.on("drawing", (data) => {
+    // Broadcast drawing data to all users
+    socket.broadcast.emit("drawing", data);
   });
 
-  // Handle eraser event
-  socket.on("erase", (data) => {
-    socket.broadcast.emit("erase", data);
+  // Listen to cursor position updates
+  socket.on("cursorMove", (data) => {
+    // Broadcast cursor position update
+    socket.broadcast.emit("cursorMove", data);
   });
 
-  // Handle cursor movement
-  socket.on("cursor-move", (data) => {
-    users[socket.id].x = data.x;
-    users[socket.id].y = data.y;
-    io.emit("user-cursor", users);
+  // Listen for settings change (color and strokeWidth)
+  socket.on("settingsChanged", (settings) => {
+    // Broadcast settings change to all users
+    socket.broadcast.emit("settingsChanged", settings);
   });
 
-  // Handle clearing the canvas
+  // Handle clear event (clear canvas for all users)
   socket.on("clear", () => {
-    canvasState = null;
-    io.emit("clear-canvas");
+    io.emit("clear");  // Broadcast clear event to all users
   });
 
-  // Handle undo/redo actions
-  socket.on("undo", (data) => {
-    canvasState = data;
-    io.emit("undo-action", data);
-  });
-
-  socket.on("redo", (data) => {
-    canvasState = data;
-    io.emit("redo-action", data);
-  });
-
-  // Handle disconnect event
+  // Handle user disconnection
   socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-    delete users[socket.id];
-    io.emit("user-list", users);
+    console.log("Client disconnected: " + socket.id);
+    users = users.filter(user => user.id !== socket.id);
+    io.emit("userDisconnected", socket.id);  // Broadcast user disconnection
   });
 });
 
-function getRandomColor() {
-  return `#${Math.floor(Math.random() * 16777215).toString(16)}`;
-}
-
-const PORT = process.env.PORT || 5173;
-
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+// Start the server
+server.listen(6969, () => {
+  console.log("Server running on port 6969");
 });

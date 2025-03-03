@@ -1,70 +1,74 @@
-body {
-  margin: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background: #f4f4f4;
-  height: 100vh;
-  font-family: "Arial", sans-serif;
-}
-
-.app-container {
+/* Basic styles */
+.App {
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 100%;
+  justify-content: center;
+  height: 100vh;
 }
 
-.title {
-  font-size: 28px;
-  font-weight: bold;
-  margin-bottom: 10px;
+h1 {
+  margin-bottom: 20px;
 }
 
-.toolbar {
+.controls {
   display: flex;
-  gap: 12px;
-  margin-bottom: 10px;
-  padding: 12px;
-  background: #ffffff;
-  box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
-  border-radius: 10px;
-  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+  gap: 10px;
 }
 
-.tool-button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 16px;
-  border: none;
-  border-radius: 6px;
-  font-size: 16px;
-  font-weight: bold;
+.control-btn {
+  padding: 10px 15px;
+  background-color: #fff;
+  border: 1px solid #ccc;
+  border-radius: 5px;
   cursor: pointer;
-  background-color: #007bff;
-  color: white;
-  transition: 0.3s;
 }
 
-.tool-button.active {
-  background-color: #0056b3;
+.control-input {
+  padding: 5px;
+  margin-top: 5px;
 }
 
-.tool-button:hover {
-  background-color: #0056b3;
+/* Canvas container */
+.canvas-container {
+  position: relative;
 }
 
-.clear {
-  background-color: #dc3545;
+/* Cursors */
+.cursor {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background-color: red;
+  pointer-events: none;
 }
 
-.clear:hover {
-  background-color: #c82333;
+/* Responsive Design */
+@media (max-width: 768px) {
+  .controls {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .canvas-container canvas {
+    width: 100%;
+    height: auto;
+  }
 }
 
-canvas {
-  border: 2px solid black;
-  background: white;
-  border-radius: 10px;
+@media (max-width: 480px) {
+  .controls {
+    gap: 8px;
+  }
+
+  .control-btn {
+    padding: 8px 12px;
+  }
+
+  .control-input {
+    padding: 4px;
+  }
 }
