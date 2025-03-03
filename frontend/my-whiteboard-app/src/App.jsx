@@ -1,3 +1,4 @@
+// App.js
 import React, { useState, useEffect, useRef } from "react";
 import { FaPen, FaEraser, FaTrash, FaUndo, FaRedo } from "react-icons/fa";
 import { io } from "socket.io-client";
@@ -14,6 +15,7 @@ function App() {
     const [redoStack, setRedoStack] = useState([]);
     const canvasRef = useRef(null);
     const ctxRef = useRef(null);
+    const lastPoint = useRef({ x: 0, y: 0 }); // Track the last point
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -21,15 +23,22 @@ function App() {
         canvas.height = window.innerHeight * 0.7;
         const ctx = canvas.getContext("2d");
         ctx.lineCap = "round";
+        ctx.lineJoin = "round"; // Ensures smooth lines
         ctxRef.current = ctx;
 
         socket.on("drawing", (data) => {
-            const { x, y, color, strokeWidth, isEraser } = data;
+            const { x, y, color, strokeWidth, isEraser, prevX, prevY } = data;
             ctxRef.current.beginPath();
-            ctxRef.current.moveTo(x, y);
-            ctxRef.current.lineTo(x, y);
             ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
             ctxRef.current.lineWidth = strokeWidth;
+
+            if (prevX !== null && prevY !== null) {
+                ctxRef.current.moveTo(prevX, prevY);
+                ctxRef.current.lineTo(x, y);
+            } else {
+                ctxRef.current.moveTo(x, y);
+                ctxRef.current.lineTo(x, y);
+            }
             ctxRef.current.stroke();
         });
 
@@ -45,6 +54,7 @@ function App() {
         ctxRef.current.beginPath();
         ctxRef.current.moveTo(offsetX, offsetY);
         setIsDrawing(true);
+        lastPoint.current = { x: offsetX, y: offsetY }; // Store the starting point
     };
 
     const draw = ({ nativeEvent }) => {
@@ -54,7 +64,18 @@ function App() {
         ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
         ctxRef.current.lineWidth = strokeWidth;
         ctxRef.current.stroke();
-        socket.emit("drawing", { x: offsetX, y: offsetY, color, strokeWidth, isEraser });
+
+        socket.emit("drawing", {
+            x: offsetX,
+            y: offsetY,
+            color,
+            strokeWidth,
+            isEraser,
+            prevX: lastPoint.current.x, // Include the last point
+            prevY: lastPoint.current.y,
+        });
+
+        lastPoint.current = { x: offsetX, y: offsetY }; // Update the last point
     };
 
     const stopDrawing = () => {
@@ -63,6 +84,7 @@ function App() {
         setIsDrawing(false);
         setHistory((prev) => [...prev, canvasRef.current.toDataURL()]);
         setRedoStack([]);
+        lastPoint.current = { x: 0, y: 0 }; // Reset the last point
     };
 
     const handleUndo = () => {
