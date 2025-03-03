@@ -4,7 +4,7 @@ import { FaPen, FaEraser, FaTrash, FaUndo, FaRedo } from "react-icons/fa";
 import { io } from "socket.io-client";
 import "./App.css";
 
-const socket = io("http://localhost:6969");
+const socket = io("https://collaborative-whiteboard-fsg8.onrender.com");
 
 function App() {
     const [isDrawing, setIsDrawing] = useState(false);
