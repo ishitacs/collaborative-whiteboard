@@ -15,11 +15,17 @@ app.use(express.static("public"));
 let users = [];
 let globalCanvasState = null;
 let userStrokes = {}; // Store strokes for each user
+let activeDrawers = new Set(); // Track users who are currently drawing
+
+// Generate a random HSL color
+const getRandomColor = () => {
+  return `hsl(${Math.floor(Math.random() * 360)}, 100%, 50%)`;
+};
 
 io.on("connection", (socket) => {
   console.log("New client connected: " + socket.id);
 
-  const userColor = `hsl(${Math.floor(Math.random() * 360)}, 100%, 50%)`;
+  const userColor = getRandomColor();
 
   // Add user to list if they don't already exist
   if (!users.some(user => user.id === socket.id)) {
@@ -40,10 +46,30 @@ io.on("connection", (socket) => {
     userStrokes: userStrokes
   });
 
+  // Send the updated users list to all clients
+  io.emit("userListUpdate", users);
+
+  // Handle drawing notifications
   socket.on("drawing", (data) => {
-    socket.broadcast.emit("drawing", data);
+    // Only broadcast if no conflict with other users
+    if (!activeDrawers.has(data.userId)) {
+      activeDrawers.add(data.userId);
+      socket.broadcast.emit("drawing", data);
+    }
   });
 
+  // Handle drawing lock to prevent conflicts
+  socket.on("drawLock", (data) => {
+    if (data.locked) {
+      activeDrawers.add(data.userId);
+    } else {
+      activeDrawers.delete(data.userId);
+    }
+    // Broadcast lock status to all clients
+    socket.broadcast.emit("drawLock", data);
+  });
+
+  // Handle stroke completion
   socket.on("strokeEnd", (data) => {
     // Update global canvas state
     globalCanvasState = data.globalState;
@@ -54,17 +80,23 @@ io.on("connection", (socket) => {
     }
     userStrokes[data.userId].push(data.stroke);
 
+    // Remove from active drawers
+    activeDrawers.delete(data.userId);
+
     // Broadcast to other clients
     socket.broadcast.emit("strokeEnd", data);
   });
 
+  // Handle cursor movements
   socket.on("cursorMove", (data) => {
     socket.broadcast.emit("cursorMove", data);
   });
 
+  // Handle canvas clearing
   socket.on("clear", () => {
     globalCanvasState = null;
     userStrokes = {};
+    activeDrawers.clear();
     io.emit("clear");
   });
 
@@ -99,11 +131,20 @@ io.on("connection", (socket) => {
     socket.broadcast.emit("redo", data);
   });
 
+  // Handle request for updated user list
+  socket.on("requestUserList", () => {
+    socket.emit("userListUpdate", users);
+  });
+
+  // Handle disconnection
   socket.on("disconnect", () => {
     console.log("Client disconnected: " + socket.id);
 
     // Remove the user from the active users list
     users = users.filter((user) => user.id !== socket.id);
+
+    // Remove from active drawers
+    activeDrawers.delete(socket.id);
 
     // Keep the user's strokes in case they reconnect
     // We could add a cleanup mechanism to remove strokes from disconnected users
@@ -111,6 +152,9 @@ io.on("connection", (socket) => {
 
     // Notify all clients about the disconnection
     io.emit("userDisconnected", socket.id);
+
+    // Send updated user list
+    io.emit("userListUpdate", users);
   });
 });
 

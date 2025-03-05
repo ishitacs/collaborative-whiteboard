@@ -3,8 +3,8 @@ import { FaPen, FaEraser, FaTrash, FaUndo, FaRedo } from "react-icons/fa";
 import { io } from "socket.io-client";
 import "./App.css";
 
-const socket = io("https://collaborative-whiteboard-fsg8.onrender.com");
-//const socket = io("http://localhost:1000");
+//const socket = io("https://collaborative-whiteboard-fsg8.onrender.com");
+const socket = io("http://localhost:1000");
 
 function App() {
     const [isDrawing, setIsDrawing] = useState(false);
@@ -25,6 +25,7 @@ function App() {
     const userId = useRef(null);
     const globalCanvasState = useRef(null);
     const userStrokes = useRef({});
+    const drawingLock = useRef(false); // Add lock to prevent concurrent drawing conflicts
 
     // Maintain separate history per user
     useEffect(() => {
@@ -136,6 +137,13 @@ function App() {
             ctxRef.current.stroke();
         });
 
+        // Listen for draw lock to prevent conflicts
+        socket.on("drawLock", (data) => {
+            if (data.userId !== socket.id) {
+                drawingLock.current = data.locked;
+            }
+        });
+
         // Listen for stroke end from other users
         socket.on("strokeEnd", (data) => {
             // Add the stroke to the appropriate user's history
@@ -145,6 +153,9 @@ function App() {
 
             userStrokes.current[data.userId].push(data.stroke);
             globalCanvasState.current = data.globalState;
+
+            // Release draw lock
+            drawingLock.current = false;
         });
 
         socket.on("clear", () => {
@@ -153,6 +164,18 @@ function App() {
             setHistory([]);
             setRedoStack([]);
             globalCanvasState.current = null;
+        });
+
+        // Listen for user count updates
+        socket.on("userCountUpdate", (count) => {
+            // Check if we need to update the connected users count
+            if (connectedUsers.length !== count) {
+                socket.emit("requestUserList");
+            }
+        });
+
+        socket.on("userListUpdate", (userList) => {
+            setConnectedUsers(userList);
         });
 
         // Listen for undo from other users
@@ -197,6 +220,9 @@ function App() {
             socket.off("clear");
             socket.off("undo");
             socket.off("redo");
+            socket.off("drawLock");
+            socket.off("userCountUpdate");
+            socket.off("userListUpdate");
             window.removeEventListener('resize', handleResize);
         };
     }, []);
@@ -222,9 +248,14 @@ function App() {
     };
 
     const startDrawing = ({ nativeEvent }) => {
-        if (isTouchDevice.current) return;
+        if (isTouchDevice.current || drawingLock.current) return;
 
         const { offsetX, offsetY } = nativeEvent;
+
+        // Acquire drawing lock
+        drawingLock.current = true;
+        socket.emit("drawLock", { userId: socket.id, locked: true });
+
         ctxRef.current.beginPath();
         ctxRef.current.moveTo(offsetX, offsetY);
         setIsDrawing(true);
@@ -244,10 +275,16 @@ function App() {
     // Touch event handlers
     const handleTouchStart = (e) => {
         e.preventDefault();
+        if (drawingLock.current) return;
+
         const touch = e.touches[0];
         const rect = canvasRef.current.getBoundingClientRect();
         const offsetX = touch.clientX - rect.left;
         const offsetY = touch.clientY - rect.top;
+
+        // Acquire drawing lock
+        drawingLock.current = true;
+        socket.emit("drawLock", { userId: socket.id, locked: true });
 
         ctxRef.current.beginPath();
         ctxRef.current.moveTo(offsetX, offsetY);
@@ -344,6 +381,10 @@ function App() {
             });
         }
 
+        // Release drawing lock
+        drawingLock.current = false;
+        socket.emit("drawLock", { userId: socket.id, locked: false });
+
         lastPoint.current = { x: 0, y: 0 };
         currentStroke.current = [];
     };
@@ -378,7 +419,6 @@ function App() {
         }, ...prev]);
 
         // Redraw the canvas without this user's last stroke
-        // Here we need to rebuild the canvas from all users' strokes except the last one from this user
         recreateCanvas();
 
         // Get the new canvas state
@@ -434,7 +474,7 @@ function App() {
         // Redraw strokes from all users
         Object.keys(userStrokes.current).forEach(uid => {
             userStrokes.current[uid].forEach(stroke => {
-                if (stroke.length > 0) {
+                if (stroke && stroke.length > 0) {
                     drawStroke(stroke);
                 }
             });
@@ -450,6 +490,8 @@ function App() {
         for (let i = 0; i < stroke.length; i++) {
             const point = stroke[i];
 
+            if (!point) continue; // Skip undefined points
+
             ctx.beginPath();
             ctx.strokeStyle = point.isEraser ? "#FFFFFF" : point.color;
             ctx.lineWidth = point.strokeWidth;
@@ -460,8 +502,11 @@ function App() {
                 ctx.lineTo(point.x, point.y);
             } else {
                 // Connect to previous point
-                ctx.moveTo(stroke[i - 1].x, stroke[i - 1].y);
-                ctx.lineTo(point.x, point.y);
+                const prevPoint = stroke[i - 1];
+                if (prevPoint) {
+                    ctx.moveTo(prevPoint.x, prevPoint.y);
+                    ctx.lineTo(point.x, point.y);
+                }
             }
 
             ctx.stroke();
@@ -499,12 +544,25 @@ function App() {
 
     return (
         <div className="App">
-            <h1 className="text-3xl text-center my-4">Collaborative Whiteboard</h1>
+            <h1>Collaborative Whiteboard</h1>
             <div className="controls">
-                <button onClick={() => setIsEraser(false)}><FaPen /> Pen</button>
-                <button onClick={() => setIsEraser(true)}><FaEraser /> Eraser</button>
-                <button onClick={handleClear}><FaTrash /> Clear</button>
                 <button
+                    className={`tool-btn ${!isEraser ? 'active' : ''}`}
+                    onClick={() => setIsEraser(false)}
+                >
+                    <FaPen /> Pen
+                </button>
+                <button
+                    className={`tool-btn ${isEraser ? 'active' : ''}`}
+                    onClick={() => setIsEraser(true)}
+                >
+                    <FaEraser /> Eraser
+                </button>
+                <button className="tool-btn" onClick={handleClear}>
+                    <FaTrash /> Clear
+                </button>
+                <button
+                    className="tool-btn"
                     onClick={handleUndo}
                     disabled={!canUndoRedo.canUndo}
                     style={{ opacity: canUndoRedo.canUndo ? 1 : 0.5 }}
@@ -512,19 +570,32 @@ function App() {
                     <FaUndo /> Undo
                 </button>
                 <button
+                    className="tool-btn"
                     onClick={handleRedo}
                     disabled={!canUndoRedo.canRedo}
                     style={{ opacity: canUndoRedo.canRedo ? 1 : 0.5 }}
                 >
                     <FaRedo /> Redo
                 </button>
-                <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
-                <input type="range" min="1" max="20" value={strokeWidth} onChange={(e) => setStrokeWidth(e.target.value)} />
+                <div className="color-picker">
+                    <label>Color:</label>
+                    <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
+                </div>
+                <div className="stroke-width">
+                    <label>Size: {strokeWidth}px</label>
+                    <input
+                        type="range"
+                        min="1"
+                        max="20"
+                        value={strokeWidth}
+                        onChange={(e) => setStrokeWidth(e.target.value)}
+                    />
+                </div>
                 <div className="user-count">
                     <span>{connectedUsers.length} users connected</span>
                 </div>
             </div>
-            <div className="canvas-container" style={{ position: 'relative' }}>
+            <div className="canvas-container">
                 <canvas
                     ref={canvasRef}
                     onMouseDown={startDrawing}
