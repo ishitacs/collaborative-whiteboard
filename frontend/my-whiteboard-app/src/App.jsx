@@ -126,7 +126,7 @@ function App() {
 
         // Listen for drawing from other users
         socket.on("drawing", (data) => {
-            const { x, y, color, strokeWidth, isEraser, prevX, prevY, userId: drawingUserId } = data;
+            const { x, y, color, strokeWidth, isEraser, prevX, prevY, userId: drawingUserId, isNewStroke } = data;
 
             // Update cursor position for this user
             if (drawingUserId !== socket.id) {
@@ -134,20 +134,22 @@ function App() {
                     x, y, color, isDrawing: true
                 };
                 updateCursors();
-            }
 
-            ctxRef.current.beginPath();
-            ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
-            ctxRef.current.lineWidth = strokeWidth;
+                ctxRef.current.beginPath();
+                ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
+                ctxRef.current.lineWidth = strokeWidth;
 
-            if (prevX !== null && prevY !== null) {
-                ctxRef.current.moveTo(prevX, prevY);
-                ctxRef.current.lineTo(x, y);
-            } else {
-                ctxRef.current.moveTo(x, y);
-                ctxRef.current.lineTo(x, y);
+                if (isNewStroke || prevX === null || prevY === null) {
+                    // Start a new path if this is the beginning of a stroke
+                    ctxRef.current.moveTo(x, y);
+                    ctxRef.current.lineTo(x, y);
+                } else {
+                    // Continue the existing stroke
+                    ctxRef.current.moveTo(prevX, prevY);
+                    ctxRef.current.lineTo(x, y);
+                }
+                ctxRef.current.stroke();
             }
-            ctxRef.current.stroke();
         });
 
         // Listen for strokeEnd from other users
@@ -367,6 +369,19 @@ function App() {
             color: userColor.current || color,
             isDrawing: true
         });
+
+        // Emit the first point of the stroke with isNewStroke flag
+        socket.emit("drawing", {
+            x: offsetX,
+            y: offsetY,
+            color,
+            strokeWidth,
+            isEraser,
+            prevX: null,
+            prevY: null,
+            userId: socket.id,
+            isNewStroke: true
+        });
     };
 
     // Touch event handlers
@@ -419,6 +434,9 @@ function App() {
             userId: socket.id
         });
 
+        // Calculate if this is the first point in a new stroke
+        const isNewStroke = currentStroke.current.length === 1;
+
         // Broadcast the drawing to other clients
         socket.emit("drawing", {
             x: offsetX,
@@ -428,7 +446,8 @@ function App() {
             isEraser,
             prevX: lastPoint.current.x,
             prevY: lastPoint.current.y,
-            userId: socket.id
+            userId: socket.id,
+            isNewStroke: isNewStroke
         });
 
         lastPoint.current = { x: offsetX, y: offsetY };
