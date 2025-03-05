@@ -15,7 +15,6 @@ app.use(express.static("public"));
 let users = [];
 let globalCanvasState = null;
 let userStrokes = {}; // Store strokes for each user
-let activeDrawers = new Set(); // Track users who are currently drawing
 
 // Generate a random HSL color
 const getRandomColor = () => {
@@ -43,30 +42,20 @@ io.on("connection", (socket) => {
   // Send current canvas state and all user strokes to the new user
   socket.emit("initialCanvas", {
     state: globalCanvasState,
-    userStrokes: userStrokes
+    userStrokes: userStrokes,
+    users: users // Send current users list
   });
 
-  // Send the updated users list to all clients
-  io.emit("userListUpdate", users);
+  // Handle cursor movement
+  socket.on("cursorMove", (data) => {
+    // Broadcast cursor position to all other clients
+    socket.broadcast.emit("cursorMove", data);
+  });
 
   // Handle drawing notifications
   socket.on("drawing", (data) => {
-    // Only broadcast if no conflict with other users
-    if (!activeDrawers.has(data.userId)) {
-      activeDrawers.add(data.userId);
-      socket.broadcast.emit("drawing", data);
-    }
-  });
-
-  // Handle drawing lock to prevent conflicts
-  socket.on("drawLock", (data) => {
-    if (data.locked) {
-      activeDrawers.add(data.userId);
-    } else {
-      activeDrawers.delete(data.userId);
-    }
-    // Broadcast lock status to all clients
-    socket.broadcast.emit("drawLock", data);
+    // Broadcast immediately to all other clients
+    socket.broadcast.emit("drawing", data);
   });
 
   // Handle stroke completion
@@ -80,23 +69,14 @@ io.on("connection", (socket) => {
     }
     userStrokes[data.userId].push(data.stroke);
 
-    // Remove from active drawers
-    activeDrawers.delete(data.userId);
-
     // Broadcast to other clients
     socket.broadcast.emit("strokeEnd", data);
-  });
-
-  // Handle cursor movements
-  socket.on("cursorMove", (data) => {
-    socket.broadcast.emit("cursorMove", data);
   });
 
   // Handle canvas clearing
   socket.on("clear", () => {
     globalCanvasState = null;
     userStrokes = {};
-    activeDrawers.clear();
     io.emit("clear");
   });
 
@@ -131,11 +111,6 @@ io.on("connection", (socket) => {
     socket.broadcast.emit("redo", data);
   });
 
-  // Handle request for updated user list
-  socket.on("requestUserList", () => {
-    socket.emit("userListUpdate", users);
-  });
-
   // Handle disconnection
   socket.on("disconnect", () => {
     console.log("Client disconnected: " + socket.id);
@@ -143,31 +118,37 @@ io.on("connection", (socket) => {
     // Remove the user from the active users list
     users = users.filter((user) => user.id !== socket.id);
 
-    // Remove from active drawers
-    activeDrawers.delete(socket.id);
+    // Notify other clients about the disconnection
+    socket.broadcast.emit("userDisconnected", socket.id);
 
     // Keep the user's strokes in case they reconnect
-    // We could add a cleanup mechanism to remove strokes from disconnected users
-    // after a period of time if needed
-
-    // Notify all clients about the disconnection
-    io.emit("userDisconnected", socket.id);
-
-    // Send updated user list
-    io.emit("userListUpdate", users);
   });
 });
 
-// Periodically clean up users list to ensure accuracy
+// Server heartbeat to ensure canvas state is synchronized
 setInterval(() => {
-  const connectedSocketIds = Array.from(io.sockets.sockets.keys());
+  // If there are any active users, send a canvas update check
+  if (users.length > 0 && globalCanvasState) {
+    io.emit("canvasStateCheck", {
+      timestamp: Date.now(),
+      checksum: generateSimpleChecksum(globalCanvasState)
+    });
+  }
+}, 10000); // Check every 10 seconds
 
-  // Remove any users that are no longer connected
-  users = users.filter(user => connectedSocketIds.includes(user.id));
+// Simple checksum function for quick verification of canvas state
+function generateSimpleChecksum(str) {
+  let hash = 0;
+  if (!str) return hash;
 
-  // Optionally, also send updated user count to all clients
-  io.emit("userCountUpdate", users.length);
-}, 30000); // Check every 30 seconds
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+
+  return hash;
+}
 
 server.listen(process.env.PORT || 1000, () => {
   console.log(`Server running on port ${process.env.PORT || 1000}`);
