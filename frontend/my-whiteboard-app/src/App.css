@@ -1,4 +1,3 @@
-/* Main layout and responsive design */
 .App {
   display: flex;
   flex-direction: column;
@@ -156,7 +155,7 @@ input[type="range"]::-webkit-slider-thumb {
   cursor: pointer;
 }
 
-/* Canvas container styling */
+
 .canvas-container {
   flex: 1;
   position: relative;
@@ -172,7 +171,6 @@ canvas {
   background-color: white;
 }
 
-/* Cursor and overlay */
 #cursor-overlay {
   position: absolute;
   top: 0;
