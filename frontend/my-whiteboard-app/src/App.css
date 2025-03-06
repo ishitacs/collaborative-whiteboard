@@ -1,10 +1,178 @@
-/* Add these styles to your App.css file */
+/* Main layout and responsive design */
+.App {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: #f5f7fa;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
 
-.canvas-container {
-  position: relative;
+h1 {
+  text-align: center;
+  color: #2c3e50;
+  margin: 0.5rem 0;
+  font-size: 1.8rem;
+}
+
+.main-content {
+  display: flex;
+  flex: 1;
   overflow: hidden;
 }
 
+/* Vertical toolbar styling */
+.vertical-toolbar {
+  display: flex;
+  flex-direction: column;
+  background-color: #2c3e50;
+  padding: 1rem;
+  width: 90px;
+  box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+  z-index: 10;
+}
+
+.tool-btn {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  margin: 0.8rem auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #34495e;
+  color: #ecf0f1;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+/* Larger icons */
+.tool-btn svg {
+  width: 24px;
+  height: 24px;
+}
+
+.tool-btn:hover {
+  background-color: #3498db;
+  transform: scale(1.05);
+}
+
+.tool-btn.active {
+  background-color: #2980b9;
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.3);
+}
+
+.tool-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Tooltip styling */
+.tool-btn::after {
+  content: attr(title);
+  position: absolute;
+  left: 120%;
+  top: 50%;
+  transform: translateY(-50%);
+  background-color: #34495e;
+  color: white;
+  padding: 0.5rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.3s, visibility 0.3s;
+  pointer-events: none;
+  z-index: 100;
+}
+
+.tool-btn:hover::after {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Color picker and stroke width styling */
+.color-picker,
+.stroke-width {
+  margin: 1.5rem 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.color-picker label,
+.stroke-width label {
+  color: #ecf0f1;
+  margin-bottom: 0.8rem;
+  font-size: 1rem;
+  text-align: center;
+}
+
+/* Circular color picker */
+input[type="color"] {
+  -webkit-appearance: none;
+  width: 50px;
+  height: 50px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  overflow: hidden;
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border-radius: 50%;
+}
+
+input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
+
+input[type="color"]::-moz-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
+
+input[type="range"] {
+  width: 100%;
+  margin: 0.8rem 0;
+  -webkit-appearance: none;
+  background: #ecf0f1;
+  height: 10px;
+  border-radius: 5px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 24px;
+  height: 24px;
+  background: #3498db;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+/* Canvas container styling */
+.canvas-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background-color: white;
+  border-radius: 8px;
+  margin: 0.5rem;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+canvas {
+  display: block;
+  background-color: white;
+}
+
+/* Cursor and overlay */
 #cursor-overlay {
   position: absolute;
   top: 0;
@@ -20,4 +188,55 @@
   pointer-events: none;
   transform: translate(-50%, -50%);
   z-index: 1001;
+  filter: drop-shadow(0px 0px 2px rgba(0, 0, 0, 0.5));
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .main-content {
+    flex-direction: column;
+  }
+
+  .vertical-toolbar {
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 0.8rem;
+    overflow-x: auto;
+  }
+
+  .tool-btn {
+    margin: 0 0.4rem;
+    width: 50px;
+    height: 50px;
+  }
+
+  .tool-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .tool-btn::after {
+    left: 50%;
+    top: 120%;
+    transform: translateX(-50%);
+  }
+
+  .color-picker,
+  .stroke-width {
+    margin: 0 1rem;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .color-picker label,
+  .stroke-width label {
+    margin-right: 0.8rem;
+    margin-bottom: 0;
+  }
+
+  input[type="range"] {
+    width: 100px;
+  }
 }

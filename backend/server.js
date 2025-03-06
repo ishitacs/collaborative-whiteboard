@@ -14,9 +14,9 @@ app.use(express.static("public"));
 
 let users = [];
 let globalCanvasState = null;
-let userStrokes = {}; // Store strokes for each user
+let userStrokes = {};
+let activeDrawingSessions = new Map(); // Track active drawing sessions per user
 
-// Generate a random HSL color
 const getRandomColor = () => {
   return `hsl(${Math.floor(Math.random() * 360)}, 100%, 50%)`;
 };
@@ -26,80 +26,89 @@ io.on("connection", (socket) => {
 
   const userColor = getRandomColor();
 
-  // Add user to list if they don't already exist
   if (!users.some(user => user.id === socket.id)) {
     users.push({ id: socket.id, color: userColor });
   }
 
-  // Initialize user strokes if needed
   if (!userStrokes[socket.id]) {
     userStrokes[socket.id] = [];
   }
 
-  // Send the new user to all clients
   io.emit("newUser", { id: socket.id, color: userColor });
 
-  // Send current canvas state and all user strokes to the new user
   socket.emit("initialCanvas", {
     state: globalCanvasState,
     userStrokes: userStrokes,
-    users: users // Send current users list
+    users: users
   });
 
-  // Handle cursor movement
   socket.on("cursorMove", (data) => {
-    // Broadcast cursor position to all other clients
     socket.broadcast.emit("cursorMove", data);
   });
 
-  // Handle drawing notifications
   socket.on("drawing", (data) => {
-    // Broadcast immediately to all other clients
-    socket.broadcast.emit("drawing", data);
+    // Store the last point for this user's drawing session
+    if (!activeDrawingSessions.has(socket.id)) {
+      activeDrawingSessions.set(socket.id, {
+        lastPoint: null,
+        isDrawing: false
+      });
+    }
+
+    const session = activeDrawingSessions.get(socket.id);
+
+    // Only broadcast if this is a valid drawing point
+    if (data.isNewStroke || session.lastPoint) {
+      // Update session with current point
+      session.lastPoint = { x: data.x, y: data.y };
+      session.isDrawing = true;
+
+      // Broadcast to other clients with the correct previous point
+      socket.broadcast.emit("drawing", {
+        ...data,
+        sessionId: socket.id // Add session ID to prevent cross-session line connections
+      });
+    }
   });
 
-  // Handle stroke completion
   socket.on("strokeEnd", (data) => {
-    // Update global canvas state
+    // Clear the drawing session for this user
+    if (activeDrawingSessions.has(socket.id)) {
+      const session = activeDrawingSessions.get(socket.id);
+      session.lastPoint = null;
+      session.isDrawing = false;
+    }
+
     globalCanvasState = data.globalState;
 
-    // Store the stroke
     if (!userStrokes[data.userId]) {
       userStrokes[data.userId] = [];
     }
     userStrokes[data.userId].push(data.stroke);
 
-    // Broadcast to other clients
     socket.broadcast.emit("strokeEnd", data);
   });
 
-  // Handle canvas clearing
   socket.on("clear", () => {
     globalCanvasState = null;
     userStrokes = {};
+    activeDrawingSessions.clear();
     io.emit("clear");
   });
 
-  // Handle undo
   socket.on("undo", (data) => {
-    // Update global canvas state
     globalCanvasState = data.globalState;
 
-    // Remove the last stroke from this user
     if (userStrokes[data.userId] && userStrokes[data.userId].length > 0) {
       userStrokes[data.userId].pop();
     }
 
-    // Broadcast to other clients
     socket.broadcast.emit("undo", data);
   });
 
-  // Handle redo
   socket.on("redo", (data) => {
-    // Update global canvas state
     globalCanvasState = data.globalState;
 
-    // Add the stroke back to the user's history
     if (data.stroke && data.userId) {
       if (!userStrokes[data.userId]) {
         userStrokes[data.userId] = [];
@@ -107,36 +116,27 @@ io.on("connection", (socket) => {
       userStrokes[data.userId].push(data.stroke);
     }
 
-    // Broadcast to other clients
     socket.broadcast.emit("redo", data);
   });
 
-  // Handle disconnection
   socket.on("disconnect", () => {
     console.log("Client disconnected: " + socket.id);
-
-    // Remove the user from the active users list
     users = users.filter((user) => user.id !== socket.id);
-
-    // Notify other clients about the disconnection
+    activeDrawingSessions.delete(socket.id); // Clean up drawing session
     socket.broadcast.emit("userDisconnected", socket.id);
-
-    // Keep the user's strokes in case they reconnect
   });
 });
 
-// Server heartbeat to ensure canvas state is synchronized
+// Periodic canvas state synchronization
 setInterval(() => {
-  // If there are any active users, send a canvas update check
   if (users.length > 0 && globalCanvasState) {
     io.emit("canvasStateCheck", {
       timestamp: Date.now(),
       checksum: generateSimpleChecksum(globalCanvasState)
     });
   }
-}, 10000); // Check every 10 seconds
+}, 10000);
 
-// Simple checksum function for quick verification of canvas state
 function generateSimpleChecksum(str) {
   let hash = 0;
   if (!str) return hash;
@@ -144,12 +144,11 @@ function generateSimpleChecksum(str) {
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+    hash = hash & hash;
   }
-
   return hash;
 }
 
-server.listen(process.env.PORT || 1000, () => {
-  console.log(`Server running on port ${process.env.PORT || 1000}`);
+server.listen(process.env.PORT || 1001, () => {
+  console.log(`Server running on port ${process.env.PORT || 1001}`);
 });

@@ -3,8 +3,8 @@ import { FaPen, FaEraser, FaTrash, FaUndo, FaRedo } from "react-icons/fa";
 import { io } from "socket.io-client";
 import "./App.css";
 
-const socket = io("https://collaborative-whiteboard-fsg8.onrender.com");
-//const socket = io("http://localhost:1000");
+//const socket = io("https://collaborative-whiteboard-fsg8.onrender.com");
+const socket = io("http://localhost:1001");
 
 function App() {
     const [isDrawing, setIsDrawing] = useState(false);
@@ -14,7 +14,7 @@ function App() {
     const [history, setHistory] = useState([]);
     const [redoStack, setRedoStack] = useState([]);
     const [canUndoRedo, setCanUndoRedo] = useState({ canUndo: false, canRedo: false });
-    const [activeUsers, setActiveUsers] = useState([]); // Track active users
+    const [activeUsers, setActiveUsers] = useState([]);
     const canvasRef = useRef(null);
     const ctxRef = useRef(null);
     const lastPoint = useRef({ x: 0, y: 0 });
@@ -24,11 +24,10 @@ function App() {
     const userId = useRef(null);
     const globalCanvasState = useRef(null);
     const userStrokes = useRef({});
-    const cursorsRef = useRef({}); // Store cursor positions of all users
+    const cursorsRef = useRef({});
+    const userLastPoints = useRef({}); // Track last point for each user
 
-    // Maintain separate history per user
     useEffect(() => {
-        // Update undo/redo button state
         setCanUndoRedo({
             canUndo: userStrokes.current[socket.id]?.length > 0,
             canRedo: redoStack.length > 0 && redoStack.some(action => action.userId === socket.id)
@@ -37,34 +36,25 @@ function App() {
 
     useEffect(() => {
         const canvas = canvasRef.current;
-        canvas.width = window.innerWidth * 0.85; // Adjusted to account for side toolbar
+        canvas.width = window.innerWidth * 0.85;
         canvas.height = window.innerHeight * 0.9;
         const ctx = canvas.getContext("2d");
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctxRef.current = ctx;
         userStrokes.current = {};
+        userLastPoints.current = {}; // Initialize last points storage
 
-        // Check if device supports touch
         isTouchDevice.current = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-
-        // Set custom cursor based on current tool
         updateCursor();
-
-        // Create cursor overlay for other users
         createCursorOverlay();
 
-        // Handle window resize
         const handleResize = () => {
             const imageData = canvas.toDataURL();
             canvas.width = window.innerWidth * 0.85;
             canvas.height = window.innerHeight * 0.9;
-
-            // Restore context properties
             ctx.lineCap = "round";
             ctx.lineJoin = "round";
-
-            // Restore drawing
             const img = new Image();
             img.onload = () => ctx.drawImage(img, 0, 0);
             img.src = imageData;
@@ -72,19 +62,15 @@ function App() {
 
         window.addEventListener('resize', handleResize);
 
-        // Listen for new user connections
         socket.on("newUser", (user) => {
             if (user.id === socket.id) {
                 userColor.current = user.color;
                 userId.current = user.id;
-
-                // Initialize user strokes
                 if (!userStrokes.current[socket.id]) {
                     userStrokes.current[socket.id] = [];
                 }
+                userLastPoints.current[socket.id] = null; // Initialize last point for new user
             }
-
-            // Update active users list
             setActiveUsers(prev => {
                 if (!prev.some(u => u.id === user.id)) {
                     return [...prev, user];
@@ -93,25 +79,23 @@ function App() {
             });
         });
 
-        // Listen for initial canvas state
         socket.on("initialCanvas", (data) => {
             if (data.state) {
                 loadCanvasState(data.state);
                 globalCanvasState.current = data.state;
             }
-
-            // Initialize user strokes from server data
             if (data.userStrokes) {
                 userStrokes.current = data.userStrokes;
             }
-
-            // Initialize active users
             if (data.users) {
                 setActiveUsers(data.users);
+                // Initialize last points for all users
+                data.users.forEach(user => {
+                    userLastPoints.current[user.id] = null;
+                });
             }
         });
 
-        // Listen for cursor movement from other users
         socket.on("cursorMove", (data) => {
             if (data.userId !== socket.id) {
                 cursorsRef.current[data.userId] = {
@@ -124,11 +108,9 @@ function App() {
             }
         });
 
-        // Listen for drawing from other users
         socket.on("drawing", (data) => {
-            const { x, y, color, strokeWidth, isEraser, prevX, prevY, userId: drawingUserId, isNewStroke } = data;
+            const { x, y, color, strokeWidth, isEraser, userId: drawingUserId, isNewStroke } = data;
 
-            // Update cursor position for this user
             if (drawingUserId !== socket.id) {
                 cursorsRef.current[drawingUserId] = {
                     x, y, color, isDrawing: true
@@ -136,33 +118,37 @@ function App() {
                 updateCursors();
 
                 ctxRef.current.beginPath();
-                ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
-                ctxRef.current.lineWidth = strokeWidth;
 
-                if (isNewStroke || prevX === null || prevY === null) {
-                    // Start a new path if this is the beginning of a stroke
+                if (isNewStroke || !userLastPoints.current[drawingUserId]) {
+                    // Start new stroke
                     ctxRef.current.moveTo(x, y);
-                    ctxRef.current.lineTo(x, y);
+                    userLastPoints.current[drawingUserId] = { x, y };
                 } else {
-                    // Continue the existing stroke
-                    ctxRef.current.moveTo(prevX, prevY);
+                    // Continue from last point
+                    const lastPoint = userLastPoints.current[drawingUserId];
+                    ctxRef.current.moveTo(lastPoint.x, lastPoint.y);
                     ctxRef.current.lineTo(x, y);
                 }
+
+                ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
+                ctxRef.current.lineWidth = strokeWidth;
                 ctxRef.current.stroke();
+
+                // Update last point for this user
+                userLastPoints.current[drawingUserId] = { x, y };
             }
         });
 
-        // Listen for strokeEnd from other users
         socket.on("strokeEnd", (data) => {
-            // Add the stroke to the appropriate user's history
             if (!userStrokes.current[data.userId]) {
                 userStrokes.current[data.userId] = [];
             }
-
             userStrokes.current[data.userId].push(data.stroke);
             globalCanvasState.current = data.globalState;
 
-            // Update cursor state to not drawing
+            // Reset last point for the user who finished their stroke
+            userLastPoints.current[data.userId] = null;
+
             if (cursorsRef.current[data.userId]) {
                 cursorsRef.current[data.userId].isDrawing = false;
                 updateCursors();
@@ -172,53 +158,39 @@ function App() {
         socket.on("clear", () => {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             userStrokes.current = {};
+            userLastPoints.current = {}; // Reset all last points
             setHistory([]);
             setRedoStack([]);
             globalCanvasState.current = null;
         });
 
-        // Listen for undo from other users
         socket.on("undo", (data) => {
-            // Update the global canvas state
             globalCanvasState.current = data.globalState;
-
-            // Update the strokes for the user who did the undo
             if (userStrokes.current[data.userId]) {
                 userStrokes.current[data.userId] = userStrokes.current[data.userId].slice(0, -1);
             }
-
-            // Reload the canvas with the new state
             loadCanvasState(data.globalState);
+            userLastPoints.current[data.userId] = null; // Reset last point for the user
         });
 
-        // Listen for redo from other users
         socket.on("redo", (data) => {
-            // Update the global canvas state
             globalCanvasState.current = data.globalState;
-
-            // Add the stroke back to the user's history
             if (data.stroke && data.userId) {
                 if (!userStrokes.current[data.userId]) {
                     userStrokes.current[data.userId] = [];
                 }
                 userStrokes.current[data.userId].push(data.stroke);
             }
-
-            // Reload the canvas with the new state
             loadCanvasState(data.globalState);
         });
 
-        // User disconnect
         socket.on("userDisconnected", (userId) => {
-            // Remove from active users
             setActiveUsers(prev => prev.filter(user => user.id !== userId));
-
-            // Remove cursor
             delete cursorsRef.current[userId];
+            delete userLastPoints.current[userId]; // Clean up last point for disconnected user
             updateCursors();
         });
 
-        // Cleanup
         return () => {
             socket.off("newUser");
             socket.off("initialCanvas");
@@ -233,7 +205,6 @@ function App() {
         };
     }, []);
 
-    // Create cursor overlay element
     const createCursorOverlay = () => {
         if (!document.getElementById('cursor-overlay')) {
             const overlay = document.createElement('div');
@@ -245,23 +216,18 @@ function App() {
             overlay.style.width = '100%';
             overlay.style.height = '100%';
             overlay.style.zIndex = '1000';
-
-            // Add to canvas container
             const canvasContainer = document.querySelector('.canvas-container');
             canvasContainer.style.position = 'relative';
             canvasContainer.appendChild(overlay);
         }
     };
 
-    // Update cursor positions of all users
     const updateCursors = () => {
         const overlay = document.getElementById('cursor-overlay');
         if (!overlay) return;
 
-        // Clear existing cursors
         overlay.innerHTML = '';
 
-        // Add cursor for each user
         Object.keys(cursorsRef.current).forEach(uid => {
             const cursorData = cursorsRef.current[uid];
             if (!cursorData) return;
@@ -273,7 +239,6 @@ function App() {
             cursor.style.top = `${cursorData.y}px`;
             cursor.style.pointerEvents = 'none';
 
-            // Draw cursor with different style based on if user is drawing
             if (cursorData.isDrawing) {
                 cursor.innerHTML = `
                     <svg width="16" height="16" viewBox="0 0 16 16">
@@ -292,7 +257,6 @@ function App() {
         });
     };
 
-    // Update cursor based on current tool
     const updateCursor = () => {
         if (!canvasRef.current) return;
 
@@ -303,16 +267,12 @@ function App() {
         }
     };
 
-    // Effect to update cursor when tool changes
     useEffect(() => {
         updateCursor();
     }, [isEraser]);
 
-    // Track cursor movement on the canvas
     const trackCursorMovement = (e) => {
         const { offsetX, offsetY } = getCoordinates(e);
-
-        // Broadcast cursor position to other users
         socket.emit("cursorMove", {
             userId: socket.id,
             x: offsetX,
@@ -322,10 +282,8 @@ function App() {
         });
     };
 
-    // Get coordinates from mouse or touch event
     const getCoordinates = (event) => {
         if (event.touches) {
-            // Touch event
             const touch = event.touches[0];
             const rect = canvasRef.current.getBoundingClientRect();
             return {
@@ -333,7 +291,6 @@ function App() {
                 offsetY: touch.clientY - rect.top
             };
         } else {
-            // Mouse event
             return {
                 offsetX: event.nativeEvent.offsetX,
                 offsetY: event.nativeEvent.offsetY
@@ -350,8 +307,8 @@ function App() {
         ctxRef.current.moveTo(offsetX, offsetY);
         setIsDrawing(true);
         lastPoint.current = { x: offsetX, y: offsetY };
+        userLastPoints.current[socket.id] = { x: offsetX, y: offsetY };
 
-        // Reset the current stroke
         currentStroke.current = [{
             x: offsetX,
             y: offsetY,
@@ -361,7 +318,6 @@ function App() {
             userId: socket.id
         }];
 
-        // Update cursor state
         socket.emit("cursorMove", {
             userId: socket.id,
             x: offsetX,
@@ -370,21 +326,17 @@ function App() {
             isDrawing: true
         });
 
-        // Emit the first point of the stroke with isNewStroke flag
         socket.emit("drawing", {
             x: offsetX,
             y: offsetY,
             color,
             strokeWidth,
             isEraser,
-            prevX: null,
-            prevY: null,
             userId: socket.id,
             isNewStroke: true
         });
     };
 
-    // Touch event handlers
     const handleTouchStart = (e) => {
         e.preventDefault();
         startDrawing(e);
@@ -393,7 +345,6 @@ function App() {
     const handleTouchMove = (e) => {
         e.preventDefault();
         if (!isDrawing) return;
-
         const { offsetX, offsetY } = getCoordinates(e);
         draw(offsetX, offsetY);
     };
@@ -405,13 +356,9 @@ function App() {
 
     const handleMouseMove = (e) => {
         if (isTouchDevice.current) return;
-
         trackCursorMovement(e);
-
-        const { offsetX, offsetY } = getCoordinates(e);
-
-        // Update for drawing if needed
         if (isDrawing) {
+            const { offsetX, offsetY } = getCoordinates(e);
             draw(offsetX, offsetY);
         }
     };
@@ -419,12 +366,13 @@ function App() {
     const draw = (offsetX, offsetY) => {
         if (!isDrawing) return;
 
+        ctxRef.current.beginPath();
+        ctxRef.current.moveTo(lastPoint.current.x, lastPoint.current.y);
         ctxRef.current.lineTo(offsetX, offsetY);
         ctxRef.current.strokeStyle = isEraser ? "#FFFFFF" : color;
         ctxRef.current.lineWidth = strokeWidth;
         ctxRef.current.stroke();
 
-        // Add the point to the current stroke
         currentStroke.current.push({
             x: offsetX,
             y: offsetY,
@@ -434,23 +382,18 @@ function App() {
             userId: socket.id
         });
 
-        // Calculate if this is the first point in a new stroke
-        const isNewStroke = currentStroke.current.length === 1;
-
-        // Broadcast the drawing to other clients
         socket.emit("drawing", {
             x: offsetX,
             y: offsetY,
             color,
             strokeWidth,
             isEraser,
-            prevX: lastPoint.current.x,
-            prevY: lastPoint.current.y,
             userId: socket.id,
-            isNewStroke: isNewStroke
+            isNewStroke: false
         });
 
         lastPoint.current = { x: offsetX, y: offsetY };
+        userLastPoints.current[socket.id] = { x: offsetX, y: offsetY };
     };
 
     const stopDrawing = () => {
@@ -459,29 +402,23 @@ function App() {
         setIsDrawing(false);
 
         if (currentStroke.current.length > 0) {
-            // Save the stroke to user's history
             if (!userStrokes.current[socket.id]) {
                 userStrokes.current[socket.id] = [];
             }
 
             const currentStrokeData = [...currentStroke.current];
             userStrokes.current[socket.id].push(currentStrokeData);
-
-            // Reset any redos
             setRedoStack([]);
 
-            // Save the global canvas state
             const currentCanvasState = canvasRef.current.toDataURL();
             globalCanvasState.current = currentCanvasState;
 
-            // Notify other clients that this stroke is complete
             socket.emit("strokeEnd", {
                 userId: socket.id,
                 stroke: currentStrokeData,
                 globalState: currentCanvasState
             });
 
-            // Update cursor state to not drawing
             socket.emit("cursorMove", {
                 userId: socket.id,
                 x: lastPoint.current.x,
@@ -492,10 +429,10 @@ function App() {
         }
 
         lastPoint.current = { x: 0, y: 0 };
+        userLastPoints.current[socket.id] = null;
         currentStroke.current = [];
     };
 
-    // Load a specific canvas state
     const loadCanvasState = (imageData) => {
         if (!imageData) {
             ctxRef.current.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
@@ -515,23 +452,17 @@ function App() {
             return;
         }
 
-        // Get the stroke to undo
         const strokeToUndo = userStrokes.current[socket.id].pop();
-
-        // Add to redo stack
         setRedoStack(prev => [{
             stroke: strokeToUndo,
             userId: socket.id
         }, ...prev]);
 
-        // Redraw the canvas without this user's last stroke
         recreateCanvas();
 
-        // Get the new canvas state
         const newCanvasState = canvasRef.current.toDataURL();
         globalCanvasState.current = newCanvasState;
 
-        // Notify other clients
         socket.emit("undo", {
             userId: socket.id,
             globalState: newCanvasState
@@ -542,30 +473,24 @@ function App() {
         const redoIndex = redoStack.findIndex(item => item.userId === socket.id);
         if (redoIndex === -1) return;
 
-        // Get the stroke to redo
         const itemToRedo = redoStack[redoIndex];
 
-        // Add the stroke back to the user's history
         if (!userStrokes.current[socket.id]) {
             userStrokes.current[socket.id] = [];
         }
         userStrokes.current[socket.id].push(itemToRedo.stroke);
 
-        // Remove from redo stack
         setRedoStack(prev => {
             const newStack = [...prev];
             newStack.splice(redoIndex, 1);
             return newStack;
         });
 
-        // Redraw the canvas with this stroke
         recreateCanvas();
 
-        // Get the new canvas state
         const newCanvasState = canvasRef.current.toDataURL();
         globalCanvasState.current = newCanvasState;
 
-        // Notify other clients
         socket.emit("redo", {
             userId: socket.id,
             stroke: itemToRedo.stroke,
@@ -573,11 +498,9 @@ function App() {
         });
     };
 
-    // Recreate the canvas from all stored strokes
     const recreateCanvas = () => {
         ctxRef.current.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
-        // Redraw strokes from all users
         Object.keys(userStrokes.current).forEach(uid => {
             userStrokes.current[uid].forEach(stroke => {
                 if (stroke && stroke.length > 0) {
@@ -587,7 +510,6 @@ function App() {
         });
     };
 
-    // Helper to draw a stroke
     const drawStroke = (stroke) => {
         if (!stroke || stroke.length === 0) return;
 
@@ -595,19 +517,16 @@ function App() {
 
         for (let i = 0; i < stroke.length; i++) {
             const point = stroke[i];
-
-            if (!point) continue; // Skip undefined points
+            if (!point) continue;
 
             ctx.beginPath();
             ctx.strokeStyle = point.isEraser ? "#FFFFFF" : point.color;
             ctx.lineWidth = point.strokeWidth;
 
             if (i === 0) {
-                // First point in stroke
                 ctx.moveTo(point.x, point.y);
                 ctx.lineTo(point.x, point.y);
             } else {
-                // Connect to previous point
                 const prevPoint = stroke[i - 1];
                 if (prevPoint) {
                     ctx.moveTo(prevPoint.x, prevPoint.y);
@@ -623,6 +542,7 @@ function App() {
         socket.emit("clear");
         ctxRef.current.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
         userStrokes.current = {};
+        userLastPoints.current = {};
         setHistory([]);
         setRedoStack([]);
         globalCanvasState.current = null;
